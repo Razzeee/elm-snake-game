@@ -2,7 +2,7 @@ module Main exposing (Block, Direction(..), Model, Msg(..), Snake, collidingWith
 
 import Browser exposing (..)
 import Html exposing (..)
-import Keyboard exposing (RawKey, characterKey)
+import Html.Events exposing (..)
 import Svg exposing (..)
 import Svg.Attributes exposing (..)
 import Time exposing (..)
@@ -25,6 +25,9 @@ type alias Model =
     { snake : Snake
     , direction : Direction
     , gameOver : Bool
+    , cherry : Maybe Cherry
+    , points : Int
+    , foundCherry : Bool
     }
 
 
@@ -38,6 +41,12 @@ type alias Snake =
     List Block
 
 
+type alias Cherry =
+    { location : Block
+    , points : Int
+    }
+
+
 type Direction
     = Left
     | Right
@@ -45,8 +54,12 @@ type Direction
     | Down
 
 
+gridSize =
+    70
+
+
 size =
-    700
+    gridSize * 10
 
 
 sizeString =
@@ -56,7 +69,7 @@ sizeString =
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( Model initSnake Left False
+    ( Model initSnake Left False (Just initCherry) 0 False
     , Cmd.none
     )
 
@@ -66,7 +79,19 @@ initSnake =
     [ createBlock 24 24
     , createBlock 25 24
     , createBlock 26 24
+    , createBlock 27 24
+    , createBlock 28 24
+    , createBlock 29 24
+    , createBlock 30 24
+    , createBlock 31 24
     ]
+
+
+initCherry : Cherry
+initCherry =
+    { location = Block 15 15
+    , points = 15
+    }
 
 
 createBlock : Int -> Int -> Block
@@ -81,7 +106,14 @@ createBlock x y =
 type Msg
     = None
     | Tick Time.Posix
-    | KeyDown RawKey
+    | ButtonUp
+    | ButtonDown
+    | ButtonLeft
+    | ButtonRight
+
+
+
+-- | KeyDown RawKey
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -90,21 +122,29 @@ update msg model =
         Tick _ ->
             updateGameState model
 
-        KeyDown key ->
-            case characterKey key of
-                Nothing ->
-                    ( model, Cmd.none )
+        ButtonUp ->
+            changeDirection Up Down model
 
-                Just value ->
-                    case value of
-                        Keyboard.ArrowUp ->
-                            ( { model | direction = Up }, Cmd.none )
+        ButtonDown ->
+            changeDirection Down Up model
 
-                        _ ->
-                            ( model, Cmd.none )
+        ButtonLeft ->
+            changeDirection Left Right model
+
+        ButtonRight ->
+            changeDirection Right Left model
 
         None ->
             ( model, Cmd.none )
+
+
+changeDirection : Direction -> Direction -> Model -> ( Model, Cmd Msg )
+changeDirection newDirection ignoredDirection model =
+    if model.direction == newDirection || model.direction == ignoredDirection then
+        ( model, Cmd.none )
+
+    else
+        ( { model | direction = newDirection }, Cmd.none )
 
 
 snakeHead : Snake -> Block
@@ -125,7 +165,50 @@ updateGameState model =
         , Cmd.none
         )
             |> collidingWithWall
+            |> collidingWithSelf
+            |> collidingWithCherry
             |> moveSnake
+
+
+collidingWithCherry : ( Model, Cmd msg ) -> ( Model, Cmd msg )
+collidingWithCherry ( model, cmd ) =
+    let
+        head =
+            model.snake
+                |> snakeHead
+    in
+    case model.cherry of
+        Nothing ->
+            ( model, cmd )
+
+        Just cherry ->
+            if cherry.location.x == head.x && cherry.location.y == head.y then
+                ( { model | points = cherry.points, cherry = Nothing, foundCherry = True }, cmd )
+
+            else
+                ( model, cmd )
+
+
+collidingWithSelf : ( Model, Cmd msg ) -> ( Model, Cmd msg )
+collidingWithSelf ( model, cmd ) =
+    let
+        head =
+            model.snake
+                |> snakeHead
+
+        maybeTail =
+            List.tail model.snake
+    in
+    case maybeTail of
+        Nothing ->
+            ( model, cmd )
+
+        Just tail ->
+            if List.member head tail then
+                ( { model | gameOver = True }, cmd )
+
+            else
+                ( model, cmd )
 
 
 collidingWithWall : ( Model, Cmd msg ) -> ( Model, Cmd msg )
@@ -135,11 +218,11 @@ collidingWithWall ( model, cmd ) =
             model.snake
                 |> snakeHead
     in
-    if head.x == 0 || head.x == size || head.y == 0 || head.x == size then
-        ( { model | gameOver = True }, cmd )
+    if head.x > 0 && head.x < gridSize - 1 && head.y > 0 && head.x < gridSize - 1 then
+        ( model, cmd )
 
     else
-        ( model, cmd )
+        ( { model | gameOver = True }, cmd )
 
 
 
@@ -169,11 +252,17 @@ moveSnake ( model, cmd ) =
 
         newSnake : Snake
         newSnake =
-            newHead
-                :: model.snake
-                |> List.reverse
-                |> List.drop 1
-                |> List.reverse
+            case model.foundCherry of
+                True ->
+                    newHead
+                        :: model.snake
+
+                False ->
+                    newHead
+                        :: model.snake
+                        |> List.reverse
+                        |> List.drop 1
+                        |> List.reverse
     in
     if model.gameOver then
         ( model
@@ -181,7 +270,12 @@ moveSnake ( model, cmd ) =
         )
 
     else
-        ( { model | snake = newSnake }, cmd )
+        case model.foundCherry of
+            True ->
+                ( { model | snake = newSnake, foundCherry = False }, cmd )
+
+            False ->
+                ( { model | snake = newSnake }, cmd )
 
 
 
@@ -198,12 +292,44 @@ view model =
         snake =
             List.map createBlockRect model.snake
 
+        cherry list =
+            case model.cherry of
+                Nothing ->
+                    list
+
+                Just value ->
+                    createBlockRect value.location :: list
+
         renderStack =
-            List.append background snake
+            snake
+                |> cherry
+                |> List.append background
     in
-    svg
-        [ width sizeString, height sizeString, viewBox "0 0 700 700" ]
-        renderStack
+    div []
+        [ svg
+            [ width sizeString, height sizeString, viewBox "0 0 700 700" ]
+            renderStack
+        , div []
+            [ button [ onClick ButtonUp ] [ Html.text "Up" ]
+            , button [ onClick ButtonLeft ] [ Html.text "Left" ]
+            , button [ onClick ButtonRight ] [ Html.text "Right" ]
+            , button [ onClick ButtonDown ] [ Html.text "Down" ]
+            ]
+        , div []
+            [ case model.gameOver of
+                True ->
+                    Html.text "Game Over"
+
+                False ->
+                    Html.text "Running"
+            ]
+        , div []
+            [ model.points
+                |> String.fromInt
+                |> String.append "Points: "
+                |> Html.text
+            ]
+        ]
 
 
 createBlockRect : Block -> Svg msg
@@ -229,6 +355,5 @@ createBlockRect block =
 subscriptions : Model -> Sub Msg
 subscriptions model =
     Sub.batch
-        [ Keyboard.downs KeyDown
-        , every 1000 Tick
+        [ every 500 Tick
         ]
